@@ -7,7 +7,7 @@ from triage_queue import (
     Patient,
     TriageLevel,
     TriageQueue,
-    handle_command,
+    run_menu,
 )
 
 T0 = datetime(2026, 1, 1, 8, 0, 0)
@@ -105,21 +105,51 @@ class TriageQueueTests(unittest.TestCase):
         self.assertEqual(len({p.name for p in self.q.list_queue()}), 1600)
 
 
-class CliTests(unittest.TestCase):
-    def test_commands(self):
-        q = TriageQueue()
-        self.assertIn("Registrado", handle_command(q, "add 3 Juan Pérez"))
-        handle_command(q, "add 1 María")
-        self.assertIn("María", handle_command(q, "peek"))
-        self.assertTrue(handle_command(q, "list").startswith("1. "))
-        self.assertIn("Total: 2", handle_command(q, "stats"))
-        self.assertIn("María", handle_command(q, "next"))
-        self.assertIn("Juan Pérez", handle_command(q, "next"))
-        self.assertIn("Error", handle_command(q, "next"))
-        self.assertIn("Uso", handle_command(q, "add 1"))
-        self.assertIn("inválido", handle_command(q, "add x Ana"))
-        self.assertIn("Error", handle_command(q, "add 9 Ana"))
-        self.assertIsNone(handle_command(q, "quit"))
+class MenuTests(unittest.TestCase):
+    def run_session(self, answers, queue=None):
+        """Ejecuta el menú con respuestas simuladas; devuelve (cola, salida)."""
+        queue = queue or TriageQueue()
+        it = iter(answers)
+        out = []
+
+        def fake_input(_prompt):
+            try:
+                return next(it)
+            except StopIteration:
+                raise EOFError from None  # como input() sin más entrada
+
+        run_menu(queue, input_fn=fake_input, print_fn=out.append)
+        return queue, "\n".join(out)
+
+    def test_full_flow(self):
+        q, out = self.run_session(
+            ["1", "Juan Pérez", "3", "1", "María", "1",
+             "3", "4", "2", "2", "2", "5"]
+        )
+        self.assertEqual(len(q), 0)
+        self.assertIn("Registrado: Juan Pérez", out)
+        self.assertIn("1. María", out)  # María primero en la lista
+        self.assertIn("Total: 2", out)
+        self.assertLess(out.index("Atendiendo a: María"), out.index("Atendiendo a: Juan Pérez"))
+        self.assertIn("Error: No hay pacientes en espera.", out)
+        self.assertIn("Hasta luego.", out)
+
+    def test_empty_queue_views(self):
+        _, out = self.run_session(["3", "4", "5"])
+        self.assertIn("La cola está vacía.", out)
+        self.assertIn("Total: 0", out)
+
+    def test_invalid_inputs_reprompt(self):
+        # opción inválida, nombre vacío, nivel inválido (texto y fuera de rango)
+        q, out = self.run_session(["9", "1", "  ", "Ana", "x", "7", "2", "5"])
+        self.assertIn("Opción inválida", out)
+        self.assertIn("El nombre no puede estar vacío.", out)
+        self.assertEqual(out.count("Nivel inválido"), 2)
+        self.assertEqual([(p.name, p.triage_level) for p in q.list_queue()], [("Ana", 2)])
+
+    def test_eof_exits_cleanly(self):
+        _, out = self.run_session([])  # sin entrada: EOF
+        self.assertIn("Hasta luego.", out)
 
 
 if __name__ == "__main__":

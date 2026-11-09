@@ -26,6 +26,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum
+from typing import Callable
 
 
 class TriageLevel(IntEnum):
@@ -131,73 +132,91 @@ class TriageQueue:
 # Interfaz de terminal
 # --------------------------------------------------------------------------
 
-AYUDA = """\
-Comandos:
-  add <nivel> <nombre>   Registrar paciente (1=crítico, 2=urgente, 3=estándar)
-  next                   Llamar al siguiente paciente (lo retira de la cola)
-  peek                   Ver quién es el siguiente sin retirarlo
-  list                   Listar la cola en orden de atención
-  stats                  Pacientes en espera por nivel
-  help                   Mostrar esta ayuda
-  quit                   Salir"""
+MENU = """\
+=== Triage Queue ===
+1. Añadir nuevo paciente
+2. Llamar al siguiente paciente
+3. Ver la cola actual
+4. Ver estadísticas de la cola
+5. Salir"""
 
 
-def handle_command(queue: TriageQueue, line: str) -> str | None:
-    """Ejecuta un comando y devuelve el texto a mostrar. None = salir."""
-    parts = line.strip().split(maxsplit=2)
-    if not parts:
-        return ""
-    cmd = parts[0].lower()
+def ask_name(input_fn: Callable[[str], str], print_fn: Callable[[str], None]) -> str:
+    while True:
+        name = input_fn("Nombre del paciente: ").strip()
+        if name:
+            return name
+        print_fn("El nombre no puede estar vacío.")
 
+
+def ask_level(input_fn: Callable[[str], str], print_fn: Callable[[str], None]) -> int:
+    while True:
+        raw = input_fn("Nivel de triaje (1=crítico, 2=urgente, 3=estándar): ").strip()
+        try:
+            return TriageLevel(int(raw))
+        except ValueError:
+            print_fn(f"Nivel inválido: {raw!r}. Usa 1, 2 o 3.")
+
+
+def add_patient(queue: TriageQueue, input_fn, print_fn) -> None:
+    patient = Patient(ask_name(input_fn, print_fn), ask_level(input_fn, print_fn))
+    queue.enqueue(patient)
+    print_fn(f"Registrado: {patient}")
+
+
+def call_next(queue: TriageQueue, print_fn) -> None:
     try:
-        if cmd == "add":
-            if len(parts) < 3:
-                return "Uso: add <nivel> <nombre>"
-            try:
-                level = int(parts[1])
-            except ValueError:
-                return f"Nivel inválido: {parts[1]!r} (usa 1, 2 o 3)."
-            patient = Patient(parts[2], level)
-            queue.enqueue(patient)
-            return f"Registrado: {patient}"
-        if cmd == "next":
-            return f"Atendiendo a: {queue.dequeue()}"
-        if cmd == "peek":
-            return f"Siguiente: {queue.peek()}"
-        if cmd == "list":
-            patients = queue.list_queue()
-            if not patients:
-                return "La cola está vacía."
-            return "\n".join(f"{i}. {p}" for i, p in enumerate(patients, 1))
-        if cmd == "stats":
-            stats = queue.stats()
-            lines = [f"Nivel {l.value} ({l.label}): {n}" for l, n in stats.items()]
-            lines.append(f"Total: {sum(stats.values())}")
-            return "\n".join(lines)
-        if cmd == "help":
-            return AYUDA
-        if cmd in ("quit", "exit"):
-            return None
-        return f"Comando desconocido: {cmd!r}. Escribe 'help'."
-    except (ValueError, EmptyQueueError) as e:
-        return f"Error: {e}"
+        print_fn(f"Atendiendo a: {queue.dequeue()}")
+    except EmptyQueueError as e:
+        print_fn(f"Error: {e}")
+
+
+def show_queue(queue: TriageQueue, print_fn) -> None:
+    patients = queue.list_queue()
+    if not patients:
+        print_fn("La cola está vacía.")
+        return
+    for i, p in enumerate(patients, 1):
+        print_fn(f"{i}. {p}")
+
+
+def show_stats(queue: TriageQueue, print_fn) -> None:
+    stats = queue.stats()
+    for level, count in stats.items():
+        print_fn(f"Nivel {level.value} ({level.label}): {count}")
+    print_fn(f"Total: {sum(stats.values())}")
+
+
+def run_menu(
+    queue: TriageQueue,
+    input_fn: Callable[[str], str] = input,
+    print_fn: Callable[[str], None] = print,
+) -> None:
+    """Bucle del menú. input_fn y print_fn son inyectables para poder testear."""
+    while True:
+        print_fn("\n" + MENU)
+        try:
+            option = input_fn("Elige una opción: ").strip()
+            if option == "1":
+                add_patient(queue, input_fn, print_fn)
+            elif option == "2":
+                call_next(queue, print_fn)
+            elif option == "3":
+                show_queue(queue, print_fn)
+            elif option == "4":
+                show_stats(queue, print_fn)
+            elif option == "5":
+                print_fn("Hasta luego.")
+                return
+            else:
+                print_fn(f"Opción inválida: {option!r}. Elige un número del 1 al 5.")
+        except (EOFError, KeyboardInterrupt):
+            print_fn("\nHasta luego.")
+            return
 
 
 def main() -> None:
-    queue = TriageQueue()
-    print("Triage Queue - gestor de cola de prioridad")
-    print(AYUDA)
-    while True:
-        try:
-            line = input("\ntriage> ")
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        output = handle_command(queue, line)
-        if output is None:
-            break
-        if output:
-            print(output)
+    run_menu(TriageQueue())
 
 
 if __name__ == "__main__":
