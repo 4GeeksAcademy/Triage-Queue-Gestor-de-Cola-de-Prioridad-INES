@@ -23,10 +23,9 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum
-from typing import Callable
 
 
 class TriageLevel(IntEnum):
@@ -45,42 +44,50 @@ class EmptyQueueError(Exception):
 
 @dataclass(frozen=True)
 class Patient:
-    ticket: int  # número de turno global, único y creciente
+    """Paciente en urgencias. Se valida al crearlo.
+
+    ``triage_level`` es 1 (crítico), 2 (urgente) o 3 (estándar); se guarda como
+    ``TriageLevel``, que es un ``int``. ``arrived_at`` es ahora por defecto.
+    """
+
     name: str
     triage_level: TriageLevel
-    arrived_at: datetime
+    arrived_at: datetime = field(default_factory=datetime.now)
 
-    def __str__(self) -> str:
-        hora = self.arrived_at.strftime("%H:%M:%S")
-        return f"#{self.ticket} {self.name} [nivel {self.triage_level.value} - {self.triage_level.label}] llegó {hora}"
-
-
-class TriageQueue:
-    def __init__(self, clock: Callable[[], datetime] = datetime.now) -> None:
-        self._clock = clock  # inyectable para poder testear con horas fijas
-        self._queues: dict[TriageLevel, deque[Patient]] = {
-            level: deque() for level in TriageLevel
-        }
-        self._next_ticket = 1
-        self._lock = threading.Lock()
-
-    def enqueue(self, name: str, level: int | TriageLevel) -> Patient:
-        """Registra un paciente nuevo y lo devuelve."""
-        name = name.strip()
+    def __post_init__(self) -> None:
+        name = self.name.strip() if isinstance(self.name, str) else ""
         if not name:
             raise ValueError("El nombre del paciente no puede estar vacío.")
         try:
-            level = TriageLevel(level)
+            level = TriageLevel(self.triage_level)
         except ValueError:
             raise ValueError(
-                f"Nivel de triaje inválido: {level!r} (usa 1, 2 o 3)."
+                f"Nivel de triaje inválido: {self.triage_level!r} (usa 1, 2 o 3)."
             ) from None
+        # La dataclass es inmutable, así que se normaliza con object.__setattr__.
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "triage_level", level)
 
+    def __str__(self) -> str:
+        hora = self.arrived_at.strftime("%H:%M:%S")
+        return f"{self.name} [nivel {self.triage_level.value} - {self.triage_level.label}] llegó {hora}"
+
+
+class TriageQueue:
+    def __init__(self) -> None:
+        self._queues: dict[TriageLevel, deque[Patient]] = {
+            level: deque() for level in TriageLevel
+        }
+        self._lock = threading.Lock()
+
+    def enqueue(self, patient: Patient) -> None:
+        """Añade un paciente: va al final de la cola de su nivel de triaje."""
+        if not isinstance(patient, Patient):
+            raise TypeError(
+                f"enqueue espera un Patient, no {type(patient).__name__}."
+            )
         with self._lock:
-            patient = Patient(self._next_ticket, name, level, self._clock())
-            self._next_ticket += 1
-            self._queues[level].append(patient)
-            return patient
+            self._queues[patient.triage_level].append(patient)
 
     def dequeue(self) -> Patient:
         """Retira y devuelve al siguiente paciente a atender."""
@@ -150,7 +157,9 @@ def handle_command(queue: TriageQueue, line: str) -> str | None:
                 level = int(parts[1])
             except ValueError:
                 return f"Nivel inválido: {parts[1]!r} (usa 1, 2 o 3)."
-            return f"Registrado: {queue.enqueue(parts[2], level)}"
+            patient = Patient(parts[2], level)
+            queue.enqueue(patient)
+            return f"Registrado: {patient}"
         if cmd == "next":
             return f"Atendiendo a: {queue.dequeue()}"
         if cmd == "peek":
