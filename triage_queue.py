@@ -5,7 +5,8 @@ Diseño
 Hay solo tres niveles de triaje, así que la cola de prioridad se modela con
 una cola FIFO (``deque``) por nivel:
 
-* encolar    -> O(1): se añade al final de la cola de su nivel.
+* encolar    -> O(1): se añade al final de la cola de su nivel (O(n) solo si
+                 llega con una hora anterior a la de pacientes ya encolados).
 * desencolar -> O(1): se toma de la primera cola no vacía (nivel 1, 2, 3).
 * peek       -> O(1).
 * stats      -> O(1).
@@ -13,7 +14,10 @@ una cola FIFO (``deque``) por nivel:
 
 Un paciente crítico que llega a mitad de proceso pasa delante de los de nivel
 2 y 3 sin reordenar nada, y el orden de llegada dentro de cada nivel lo
-garantiza la propia estructura FIFO.
+mantiene la propia estructura FIFO.
+
+Cola vacía: ``dequeue`` y ``peek`` lanzan ``EmptyQueueError`` con un mensaje
+claro, que el menú de terminal captura e informa sin romper el programa.
 
 Todas las operaciones están protegidas con un ``Lock`` para que dos hilos
 (o dos puestos de enfermería) no corrompan la cola al actualizarla a la vez.
@@ -22,6 +26,7 @@ Todas las operaciones están protegidas con un ``Lock`` para que dos hilos
 from __future__ import annotations
 
 import threading
+from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -82,13 +87,23 @@ class TriageQueue:
         self._lock = threading.Lock()
 
     def enqueue(self, patient: Patient) -> None:
-        """Añade un paciente: va al final de la cola de su nivel de triaje."""
+        """Añade un paciente en su nivel de triaje, por orden de llegada.
+
+        Lo normal es que llegue después que los ya encolados y se añada al
+        final (O(1)). Si su ``arrived_at`` es anterior al de alguno de su
+        nivel, se coloca antes que ellos; con la misma hora, va detrás.
+        """
         if not isinstance(patient, Patient):
             raise TypeError(
                 f"enqueue espera un Patient, no {type(patient).__name__}."
             )
         with self._lock:
-            self._queues[patient.triage_level].append(patient)
+            queue = self._queues[patient.triage_level]
+            if not queue or queue[-1].arrived_at <= patient.arrived_at:
+                queue.append(patient)
+            else:
+                arrivals = [p.arrived_at for p in queue]
+                queue.insert(bisect_right(arrivals, patient.arrived_at), patient)
 
     def dequeue(self) -> Patient:
         """Retira y devuelve al siguiente paciente a atender."""

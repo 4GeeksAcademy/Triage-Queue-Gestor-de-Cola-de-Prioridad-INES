@@ -72,6 +72,41 @@ class TriageQueueTests(unittest.TestCase):
         self.add("c1", 1)
         self.assertEqual(self.names(), ["c1", "e1"])
 
+    def test_critical_goes_ahead_of_all_waiting_level_2_and_3(self):
+        for i in range(3):
+            self.add(f"u{i}", 2)
+            self.add(f"e{i}", 3)
+        self.add("critico", 1)
+        self.assertEqual(self.q.peek().name, "critico")
+        self.assertEqual(self.names()[0], "critico")
+        self.assertEqual(self.names()[1:], ["u0", "u1", "u2", "e0", "e1", "e2"])
+
+    def test_two_criticals_keep_arrival_order(self):
+        self.add("c1", 1)
+        self.add("c2", 1)
+        self.assertEqual(self.names(), ["c1", "c2"])
+
+    def test_same_level_follows_arrived_at_even_if_enqueued_out_of_order(self):
+        self.q.enqueue(Patient("tarde", 2, T0 + timedelta(minutes=10)))
+        self.q.enqueue(Patient("temprano", 2, T0 + timedelta(minutes=1)))
+        self.q.enqueue(Patient("medio", 2, T0 + timedelta(minutes=5)))
+        self.assertEqual(self.names(), ["temprano", "medio", "tarde"])
+
+    def test_same_arrival_time_keeps_enqueue_order(self):
+        for n in ["a", "b", "c"]:
+            self.q.enqueue(Patient(n, 3, T0))
+        self.assertEqual(self.names(), ["a", "b", "c"])
+
+    def test_empty_after_draining_still_handled(self):
+        self.add("Ana", 1)
+        self.q.dequeue()
+        with self.assertRaises(EmptyQueueError):
+            self.q.dequeue()
+        with self.assertRaises(EmptyQueueError):
+            self.q.peek()
+        self.add("Luis", 3)  # la cola sigue siendo utilizable
+        self.assertEqual(self.q.peek().name, "Luis")
+
     def test_peek_does_not_remove(self):
         self.add("Ana", 3)
         self.assertEqual(self.q.peek().name, "Ana")
